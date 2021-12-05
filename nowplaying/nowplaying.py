@@ -42,6 +42,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    environ["SPOTIPY_CLIENT_ID"] = "8ec7c3d0cfea4d5da920f02f000a84c9"
-    environ["SPOTIPY_CLIENT_SECRET"] = "17fc8571cf484e4c9d857b6a3651e9de"
     exit(main())
