@@ -10,9 +10,7 @@ from spotipy.oauth2 import SpotifyClientCredentials
 
 
 def main() -> int:
-    if environ.get("NP_MUTEX") == "unlocked":
-        environ["NP_MUTEX"] = "locked"
-
+    try:
         _track_id = environ.get("TRACK_ID")
         _spotify = Spotify(auth_manager=SpotifyClientCredentials())
         _track = _spotify.track(_track_id)
@@ -38,12 +36,12 @@ def main() -> int:
         _img = _img.resize((WIDTH, HEIGHT))
         _display.display(_img)
 
-        environ["NP_MUTEX"] = "unlocked"
         return 0
-    else:
-        return 0
+    except Exception:
+        return 1
 
 
 if __name__ == "__main__":
-    environ["NP_MUTEX"] = "unlocked" # Fix This
+    environ["SPOTIPY_CLIENT_ID"] = "8ec7c3d0cfea4d5da920f02f000a84c9"
+    environ["SPOTIPY_CLIENT_SECRET"] = "17fc8571cf484e4c9d857b6a3651e9de"
     exit(main())
