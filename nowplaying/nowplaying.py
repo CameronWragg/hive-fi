@@ -14,7 +14,7 @@ def main() -> int:
         environ["NP_MUTEX"] = "locked"
 
         _track_id = environ.get("TRACK_ID")
-        _spotify = Spotify(auth_manager=SpotifyClientCredentials(client_id=environ.get("SPOTIFY_CLIENT_ID"), client_secret=environ.get("SPOTIFY_CLIENT_SECRET")))
+        _spotify = Spotify(auth_manager=SpotifyClientCredentials())
         _track = _spotify.track(_track_id)
         _res = get(_track["album"]["images"][0]['url'])
         _img = Image.open(_res.raw)
@@ -45,5 +45,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    environ["NP_MUTEX"] = "unlocked" # Fix
+    environ["NP_MUTEX"] = "unlocked" # Fix This
     exit(main())
