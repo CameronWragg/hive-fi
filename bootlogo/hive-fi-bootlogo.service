@@ -4,7 +4,9 @@ After=multi-user.target
 
 [Service]
 Type=idle
+User=pi
 ExecStart=/usr/bin/python /home/pi/hive-fi/bootlogo/hive-fi-bootlogo.py
+Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
