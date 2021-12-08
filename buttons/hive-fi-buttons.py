@@ -9,7 +9,7 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setup(BUTTONS, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(13, GPIO.OUT)
 
-B_CYCLE = [0, 25, 50, 100]
+B_CYCLE = [0, 25, 50, 75, 100]
 BACKLIGHT = GPIO.PWM(13, 500)
 BACKLIGHT.start(100)
 
@@ -19,8 +19,9 @@ def default_behaviour(pin):
 
 def backlight_change(pin) -> None:
     label = LABELS[BUTTONS.index(pin)]
-    print(f"Button press detected on {label}, changing backlight brightness.")
     _next_b_cycle = B_CYCLE.pop(0)
+    print(f"Button press detected on {label}, changing backlight brightness to {_next_b_cycle}.")
+    
     B_CYCLE.append(_next_b_cycle)
     BACKLIGHT.ChangeDutyCycle(_next_b_cycle)
 
