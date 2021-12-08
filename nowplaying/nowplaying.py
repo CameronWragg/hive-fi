@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from os import environ, system
+from os import system
 from sys import argv, exit
 
 from PIL import Image
@@ -14,7 +14,11 @@ def main() -> int:
         system(f"export SPOTIPY_CLIENT_ID='{argv[1]}'")
         system(f"export SPOTIPY_CLIENT_SECRET='{argv[2]}'")
 
-        _track_id = environ.get("TRACK_ID")
+        with open("/etc/default/nowplaying") as file:
+            _lines = [line.rstrip() for line in file.readlines()]
+
+        _event = _lines[0]
+        _track_id = _lines[1]
         _spotify = Spotify(client_credentials_manager=SpotifyClientCredentials())
         _track = _spotify.track(_track_id)
         _res = get(_track["album"]["images"][0]['url'])
