@@ -1,1 +1,1 @@
-printf "$PLAYER_EVENT\n$TRACK_ID" > /etc/default/nowplaying
+printf "$PLAYER_EVENT\n$TRACK_ID" > /usr/local/bin/nowplaying

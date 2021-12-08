@@ -10,7 +10,7 @@ from ST7789 import BG_SPI_CS_FRONT, ST7789
 
 def main() -> int:
     try:
-        with open("/etc/default/nowplaying") as file:
+        with open("/usr/local/bin/nowplaying") as file:
             _lines = [line.rstrip() for line in file.readlines()]
 
         _event = _lines[0]
@@ -34,11 +34,8 @@ def main() -> int:
             offset_top=0
         )
 
-        WIDTH = _display.width
-        HEIGHT = _display.height
-
         _display.begin()
-        _img = _img.resize((WIDTH, HEIGHT))
+        _img = _img.resize((_display.width, _display.height))
         _display.display(_img)
 
         return 0
