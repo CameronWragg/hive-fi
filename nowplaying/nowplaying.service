@@ -1,0 +1,11 @@
+[Unit]
+Description=Spotify Now Playing Service
+After=multi-user.target
+
+[Service]
+Type=idle
+User=pi
+ExecStart=/usr/bin/python '/home/pi/hive-fi/nowplaying/nowplaying.py <SPOTIFYCLIENTID> <SPOTIFYCLIENTSECRET>'
+
+[Install]
+WantedBy=multi-user.target
