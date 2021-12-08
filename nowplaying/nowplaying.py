@@ -16,7 +16,9 @@ def main() -> int:
         _event = _lines[0]
         _track_id = _lines[1]
         _spotify = Spotify(auth_manager=SpotifyClientCredentials(client_id=argv[1], client_secret=argv[2]))
+        print(_track_id)
         _track = _spotify.track(_track_id)
+        print(_track["album"]["images"][0]['url'])
         _res = get(_track["album"]["images"][0]['url'])
         _img = Image.open(_res.raw)
 
