@@ -4,7 +4,9 @@ After=multi-user.target
 
 [Service]
 Type=idle
+User=pi
 ExecStart=/usr/bin/python /home/pi/hive-fi/buttons/hive-fi-buttons.py
+Restart=always
 
 [Install]
 WantedBy=multi-user.target
