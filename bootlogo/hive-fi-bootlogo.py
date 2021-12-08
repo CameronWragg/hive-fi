@@ -2,7 +2,7 @@
 from sys import exit
 
 from PIL import Image
-from ST7789 import ST7789
+from ST7789 import BG_SPI_CS_FRONT, ST7789
 
 
 def main() -> int:
@@ -11,9 +11,9 @@ def main() -> int:
             height=240,
             rotation=90,
             port=0,
-            cs=ST7789.BG_SPI_CS_FRONT, 
+            cs=BG_SPI_CS_FRONT,
             dc=9,
-            backlight=19,
+            backlight=None,
             spi_speed_hz=80 * 1000 * 1000,
             offset_left=0,
             offset_top=0

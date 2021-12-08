@@ -1,0 +1,10 @@
+[Unit]
+Description=PiDi Buttons on Boot Service
+After=multi-user.target
+
+[Service]
+Type=idle
+ExecStart=/usr/bin/python /home/pi/hive-fi/buttons/hive-fi-buttons.py
+
+[Install]
+WantedBy=multi-user.target
