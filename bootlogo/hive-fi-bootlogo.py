@@ -1,34 +1,27 @@
 #!/usr/bin/env python3
 from sys import exit
 
+import RPi.GPIO as GPIO
 from PIL import Image
 from ST7789 import BG_SPI_CS_FRONT, ST7789
 
 
 def main() -> int:
     try:
-        disp = ST7789(
-            height=240,
-            rotation=90,
+        display = ST7789(
             port=0,
-            cs=BG_SPI_CS_FRONT,
+            cs=BG_SPI_CS_FRONT, 
             dc=9,
-            backlight=None,
-            spi_speed_hz=80 * 1000 * 1000,
-            offset_left=0,
-            offset_top=0
+            spi_speed_hz=80 * 1000 * 1000
         )
 
-        WIDTH = disp.width
-        HEIGHT = disp.height
-
-        disp.begin()
         image = Image.open("/home/pi/hive-fi/bootlogo/hive-fi.jpeg")
-        image = image.resize((WIDTH, HEIGHT))
-        disp.display(image)
+        image = image.resize((display.width, display.height))
+        display.display(image)
         return 0
 
     except Exception:
+        GPIO.cleanup()
         return 1
 
 
