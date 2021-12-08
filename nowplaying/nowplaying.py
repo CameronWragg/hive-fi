@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from os import system
 from sys import argv, exit
 
 from PIL import Image
@@ -11,15 +10,12 @@ from ST7789 import BG_SPI_CS_FRONT, ST7789
 
 def main() -> int:
     try:
-        system(f"export SPOTIPY_CLIENT_ID='{argv[1]}'")
-        system(f"export SPOTIPY_CLIENT_SECRET='{argv[2]}'")
-
         with open("/etc/default/nowplaying") as file:
             _lines = [line.rstrip() for line in file.readlines()]
 
         _event = _lines[0]
         _track_id = _lines[1]
-        _spotify = Spotify(client_credentials_manager=SpotifyClientCredentials())
+        _spotify = Spotify(auth_manager=SpotifyClientCredentials(client_id=argv[1], client_secret=argv[2]))
         _track = _spotify.track(_track_id)
         _res = get(_track["album"]["images"][0]['url'])
         _img = Image.open(_res.raw)
