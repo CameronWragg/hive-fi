@@ -21,7 +21,7 @@ def main() -> int:
             )
         )
 
-        with open("/usr/local/bin/nowplaying") as file:
+        with open("/tmp/nowplaying") as file:
             event_and_trackid = [line.rstrip() for line in file.readlines()]
 
         if event_and_trackid[0] != "stopped":
