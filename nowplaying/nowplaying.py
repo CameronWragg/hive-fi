@@ -29,6 +29,7 @@ def main() -> int:
             cover_art = urlretrieve(
                 track["album"]["images"][0]["url"], "/usr/local/bin/nowplaying.jpg"
             )[0]
+            print(cover_art)
             display.display(
                 Image.open(cover_art).resize((display.width, display.height))
             )
