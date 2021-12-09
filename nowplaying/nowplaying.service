@@ -6,6 +6,8 @@ After=multi-user.target
 Type=idle
 User=pi
 ExecStart=/usr/bin/python '/home/pi/hive-fi/nowplaying/nowplaying.py <SPOTIFYCLIENTID> <SPOTIFYCLIENTSECRET>'
+Restart=always
+RestartSec=15
 
 [Install]
 WantedBy=multi-user.target
