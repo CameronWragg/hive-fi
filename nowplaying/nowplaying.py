@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 from sys import argv, exit
+from urllib.request import urlretrieve
 
 import RPi.GPIO as GPIO
 from PIL import Image
-from requests import get
 from spotipy import Spotify
 from spotipy.oauth2 import SpotifyClientCredentials
 from ST7789 import BG_SPI_CS_FRONT, ST7789
@@ -26,10 +26,11 @@ def main() -> int:
 
         if event_and_trackid[0] != "stopped":
             track = spotify.track(event_and_trackid[1])
+            cover_art = urlretrieve(
+                track["album"]["images"][0]["url"], "/usr/local/bin/nowplaying.jpg"
+            )[0]
             display.display(
-                Image.open(get(track["album"]["images"][0]["url"]).raw).resize(
-                    (display.width, display.height)
-                )
+                Image.open(cover_art).resize((display.width, display.height))
             )
         else:
             display.display(
