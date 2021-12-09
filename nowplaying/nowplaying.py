@@ -21,15 +21,13 @@ def main() -> int:
             )
         )
 
-        with open("/tmp/nowplaying") as file:
+        with open("/etc/default/nowplaying") as file:
             event_and_trackid = [line.rstrip() for line in file.readlines()]
 
         if event_and_trackid[0] != "stopped":
             track = spotify.track(event_and_trackid[1])
-            cover_art = get(track["album"]["images"][0]["url"])
-            print(cover_art)
             display.display(
-                Image.open(cover_art.content).resize((display.width, display.height))
+                Image.open(get(track["album"]["images"][0]["url"]).raw).resize((display.width, display.height))
             )
         else:
             display.display(
