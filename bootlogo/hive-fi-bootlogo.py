@@ -9,15 +9,15 @@ from ST7789 import BG_SPI_CS_FRONT, ST7789
 def main() -> int:
     try:
         display = ST7789(
-            port=0,
-            cs=BG_SPI_CS_FRONT, 
-            dc=9,
-            spi_speed_hz=80 * 1000 * 1000
+            port=0, cs=BG_SPI_CS_FRONT, dc=9, spi_speed_hz=80 * 1000 * 1000
         )
 
-        image = Image.open("/home/pi/hive-fi/bootlogo/hive-fi.jpeg")
-        image = image.resize((display.width, display.height))
-        display.display(image)
+        display.display(
+            Image.open("/home/pi/hive-fi/bootlogo/hive-fi.jpeg").resize(
+                (display.width, display.height)
+            )
+        )
+
         return 0
 
     except Exception:

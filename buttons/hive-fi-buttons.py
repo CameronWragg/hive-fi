@@ -8,7 +8,7 @@ import RPi.GPIO as GPIO
 def main() -> int:
     try:
         BUTTONS = [5, 6, 16, 24]
-        LABELS = ['A', 'B', 'X', 'Y']
+        LABELS = ["A", "B", "X", "Y"]
         BL_CYCLE = [50, 75, 100, 0, 25]
 
         GPIO.setmode(GPIO.BCM)
@@ -18,11 +18,11 @@ def main() -> int:
         BACKLIGHT = GPIO.PWM(13, 500)
         BACKLIGHT.start(25)
 
-        def default_behaviour(pin):
+        def default(pin):
             label = LABELS[BUTTONS.index(pin)]
             print(f"{label} button pressed, no action currently assigned.")
 
-        def backlight_change(pin) -> None:
+        def bl_change(pin) -> None:
             label = LABELS[BUTTONS.index(pin)]
             _next_b_cycle = BL_CYCLE.pop(0)
             print(f"{label} button pressed, backlight set to: {_next_b_cycle}.")
@@ -45,9 +45,8 @@ def main() -> int:
             GPIO.cleanup()
             system(command)
 
-
-        GPIO.add_event_detect(BUTTONS[0], GPIO.FALLING, default_behaviour, bouncetime=200)
-        GPIO.add_event_detect(BUTTONS[1], GPIO.FALLING, backlight_change, bouncetime=200)
+        GPIO.add_event_detect(BUTTONS[0], GPIO.FALLING, default, bouncetime=200)
+        GPIO.add_event_detect(BUTTONS[1], GPIO.FALLING, bl_change, bouncetime=200)
         GPIO.add_event_detect(BUTTONS[2], GPIO.FALLING, safe_shutdown, bouncetime=200)
         GPIO.add_event_detect(BUTTONS[3], GPIO.FALLING, safe_reboot, bouncetime=200)
 

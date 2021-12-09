@@ -12,28 +12,31 @@ from ST7789 import BG_SPI_CS_FRONT, ST7789
 def main() -> int:
     try:
         display = ST7789(
-            port=0,
-            cs=BG_SPI_CS_FRONT, 
-            dc=9,
-            spi_speed_hz=80 * 1000 * 1000
+            port=0, cs=BG_SPI_CS_FRONT, dc=9, spi_speed_hz=80 * 1000 * 1000
         )
 
-        display.reset()
+        spotify = Spotify(
+            auth_manager=SpotifyClientCredentials(
+                client_id=argv[1], client_secret=argv[2]
+            )
+        )
 
         with open("/usr/local/bin/nowplaying") as file:
-            lines = [line.rstrip() for line in file.readlines()]
+            event_and_trackid = [line.rstrip() for line in file.readlines()]
 
-        event = lines[0]
-        print(event)
-        track_id = lines[1]
-        spotify = Spotify(auth_manager=SpotifyClientCredentials(client_id=argv[1], client_secret=argv[2]))
-        print(track_id)
-        track = spotify.track(track_id)
-        print(track["album"]["images"][0]['url'])
-        res = get(track["album"]["images"][0]['url'])
-        img = Image.open(res.raw)
-        img = img.resize((display.width, display.height))
-        display.display(img)
+        if event_and_trackid[0] != "stopped":
+            track = spotify.track(event_and_trackid[1])
+            display.display(
+                Image.open(get(track["album"]["images"][0]["url"]).raw).resize(
+                    (display.width, display.height)
+                )
+            )
+        else:
+            display.display(
+                Image.open("/home/pi/hive-fi/bootlogo/hive-fi.jpeg").resize(
+                    (display.width, display.height)
+                )
+            )
 
         return 0
 
