@@ -1,0 +1,14 @@
+# Runtime dependencies for the hive-fi services.
+#
+# On Raspberry Pi OS, prefer the packaged builds where they exist:
+#
+#   sudo apt install python3-pil python3-numpy python3-spidev \
+#                    python3-gpiozero python3-lgpio
+#
+# then create the virtualenv with --system-site-packages and install the rest
+# from here. See docs/installation.md.
+
+pillow>=9.1
+st7789>=1.0.1
+gpiozero>=2.0
+lgpio>=0.2.2

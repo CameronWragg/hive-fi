@@ -1,0 +1,36 @@
+//
+// Example /etc/shairport-sync.conf for hive-fi.
+//
+// This covers only the settings hive-fi depends on. The full annotated example
+// ships with shairport-sync at scripts/shairport-sync.conf; everything not
+// mentioned here can be left at its default.
+//
+// See docs/shairport-sync.md for the build flags -- the metadata pipe needs
+// shairport-sync to have been configured --with-metadata.
+//
+
+general = {
+//  The name this speaker advertises on the network.
+    name = "hive-fi";
+};
+
+alsa = {
+//  The Pirate Audio DAC, as it appears in `aplay -l`.
+    output_device = "hw:sndrpihifiberry";
+};
+
+metadata = {
+//  Required: without this the pipe is never written.
+    enabled = "yes";
+
+//  Required for album art. Separate from `enabled` -- with this off you get
+//  track text only.
+    include_cover_art = "yes";
+
+//  Must match --pipe / HIVE_FI_METADATA_PIPE in hive-fi-nowplaying.service.
+    pipe_name = "/tmp/shairport-sync-metadata";
+
+//  How long to wait, in milliseconds, on a blocked pipe before abandoning an
+//  item. Cover art is the item most likely to hit this.
+    pipe_timeout = 5000;
+};

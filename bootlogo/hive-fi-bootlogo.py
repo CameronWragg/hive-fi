@@ -1,29 +1,88 @@
 #!/usr/bin/env python3
-from sys import exit
+"""Draw the hive-fi logo on the Pirate Audio LCD at boot.
 
-import RPi.GPIO as GPIO
-from PIL import Image
-from ST7789 import BG_SPI_CS_FRONT, ST7789
+This is a one-shot: it paints the panel and exits.  The ST7789 keeps its
+framebuffer without a host attached, so the logo stays up until something
+else — normally hive-fi-nowplaying — draws over it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+from PIL import Image, ImageOps
+
+LOG = logging.getLogger("hive-fi-bootlogo")
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_LOGO = REPO_ROOT / "bootlogo" / "hive-fi.jpeg"
+
+# The Pirate Audio LCD is a 240x240 ST7789 on SPI0, data/command on BCM 9.
+SIZE = 240
+DC_PIN = 9
+SPI_PORT = 0
+SPI_SPEED_HZ = 80 * 1000 * 1000
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--logo",
+        default=str(DEFAULT_LOGO),
+        help="image to display (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--rotation",
+        type=int,
+        choices=(0, 90, 180, 270),
+        default=90,
+        help="display rotation in degrees (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--spi-speed",
+        type=int,
+        default=SPI_SPEED_HZ,
+        help="SPI clock in Hz (default: %(default)s)",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
     try:
+        # Imported here so that --help works on a machine without the hardware.
+        from st7789 import BG_SPI_CS_FRONT, ST7789
+
         display = ST7789(
-            port=0, cs=BG_SPI_CS_FRONT, dc=9, spi_speed_hz=80 * 1000 * 1000
+            port=SPI_PORT,
+            cs=BG_SPI_CS_FRONT,
+            dc=DC_PIN,
+            width=SIZE,
+            height=SIZE,
+            rotation=args.rotation,
+            spi_speed_hz=args.spi_speed,
         )
 
-        display.display(
-            Image.open("/home/pi/hive-fi/bootlogo/hive-fi.jpeg").resize(
-                (display.width, display.height)
+        with Image.open(args.logo) as image:
+            # Scale and centre-crop rather than squashing to the square panel.
+            logo = ImageOps.fit(
+                ImageOps.exif_transpose(image).convert("RGB"),
+                (SIZE, SIZE),
+                method=Image.LANCZOS,
             )
-        )
 
-        return 0
-
+        display.display(logo)
     except Exception:
-        GPIO.cleanup()
+        LOG.exception("could not display %s", args.logo)
         return 1
+
+    return 0
 
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())

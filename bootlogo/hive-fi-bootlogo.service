@@ -1,12 +1,19 @@
 [Unit]
-Description=PiDi Logo on Boot Service
+Description=hive-fi boot logo
+Documentation=https://github.com/CameronWragg/hive-fi
 After=multi-user.target
+# hive-fi-nowplaying draws to the same panel; make sure the logo lands first.
+Before=hive-fi-nowplaying.service
 
 [Service]
-Type=idle
-User=pi
-ExecStart=/usr/bin/python /home/pi/hive-fi/bootlogo/hive-fi-bootlogo.py
-Restart=on-failure
+Type=oneshot
+User=__HIVE_FI_USER__
+Group=__HIVE_FI_GROUP__
+SupplementaryGroups=gpio spi
+ExecStart=__HIVE_FI_PYTHON__ __HIVE_FI_ROOT__/bootlogo/hive-fi-bootlogo.py
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

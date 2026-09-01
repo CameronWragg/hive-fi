@@ -1,1 +1,0 @@
-printf "$PLAYER_EVENT\n$TRACK_ID" > /etc/default/nowplaying

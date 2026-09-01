@@ -1,12 +1,18 @@
 [Unit]
-Description=PiDi Buttons on Boot Service
+Description=hive-fi Pirate Audio buttons
+Documentation=https://github.com/CameronWragg/hive-fi
 After=multi-user.target
 
 [Service]
-Type=idle
-User=pi
-ExecStart=/usr/bin/python /home/pi/hive-fi/buttons/hive-fi-buttons.py
+Type=simple
+User=__HIVE_FI_USER__
+Group=__HIVE_FI_GROUP__
+SupplementaryGroups=gpio spi
+ExecStart=__HIVE_FI_PYTHON__ __HIVE_FI_ROOT__/buttons/hive-fi-buttons.py
 Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

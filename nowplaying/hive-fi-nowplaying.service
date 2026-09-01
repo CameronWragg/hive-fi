@@ -1,0 +1,22 @@
+[Unit]
+Description=hive-fi now playing display (shairport-sync)
+Documentation=https://github.com/CameronWragg/hive-fi
+After=multi-user.target shairport-sync.service
+# Not a hard dependency: the service shows the idle logo and waits for the
+# metadata pipe, so it copes with shairport-sync starting later or restarting.
+Wants=shairport-sync.service
+
+[Service]
+Type=simple
+User=__HIVE_FI_USER__
+Group=__HIVE_FI_GROUP__
+SupplementaryGroups=gpio spi
+Environment=HIVE_FI_METADATA_PIPE=/tmp/shairport-sync-metadata
+ExecStart=__HIVE_FI_PYTHON__ __HIVE_FI_ROOT__/nowplaying/hive-fi-nowplaying.py --clear-on-exit
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,61 +1,120 @@
+#!/usr/bin/env python3
+"""Pirate Audio button handling for hive-fi.
+
+The four buttons sit on BCM 5, 6, 16 and 24 (A, B, X, Y) and are active low.
+The LCD backlight is on BCM 13 and is driven with PWM so it can be dimmed.
+
+This service owns BCM 13.  hive-fi-nowplaying deliberately leaves the
+backlight alone so the two do not fight over the same line.
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
 import signal
-from os import system
-from sys import exit
+import subprocess
+import sys
 
-import RPi.GPIO as GPIO
+from gpiozero import PWMLED, Button
+
+LOG = logging.getLogger("hive-fi-buttons")
+
+BUTTON_A, BUTTON_B, BUTTON_X, BUTTON_Y = 5, 6, 16, 24
+BACKLIGHT_PIN = 13
+
+# Brightness steps cycled by the B button, as fractions of full brightness.
+BACKLIGHT_LEVELS = (0.5, 0.75, 1.0, 0.0, 0.25)
+BACKLIGHT_DEFAULT = 0.25
+
+BOUNCE_SECONDS = 0.2
 
 
-def main() -> int:
+class Backlight:
+    """Cycles the LCD backlight through a fixed set of brightness steps."""
+
+    def __init__(
+        self, pin: int = BACKLIGHT_PIN, initial: float = BACKLIGHT_DEFAULT
+    ) -> None:
+        self._led = PWMLED(pin, initial_value=initial)
+        self._index = 0
+
+    def cycle(self) -> None:
+        level = BACKLIGHT_LEVELS[self._index]
+        self._index = (self._index + 1) % len(BACKLIGHT_LEVELS)
+        LOG.info("backlight set to %d%%", round(level * 100))
+        self._led.value = level
+
+    def close(self) -> None:
+        self._led.close()
+
+
+def power_command(action: str) -> list[str]:
+    """`shutdown` needs root, and the service does not run as root."""
+    return [
+        "sudo",
+        "-n",
+        "/sbin/shutdown",
+        "-h" if action == "poweroff" else "-r",
+        "now",
+    ]
+
+
+def run_power_command(action: str, backlight: Backlight) -> None:
+    LOG.info("%s requested", action)
+    backlight.close()
     try:
-        BUTTONS = [5, 6, 16, 24]
-        LABELS = ["A", "B", "X", "Y"]
-        BL_CYCLE = [50, 75, 100, 0, 25]
+        subprocess.run(power_command(action), check=True)
+    except (OSError, subprocess.CalledProcessError):
+        # Most likely a missing sudoers rule -- see docs/installation.md.
+        LOG.exception("could not %s", action)
 
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup(BUTTONS, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.setup(13, GPIO.OUT)
 
-        BACKLIGHT = GPIO.PWM(13, 500)
-        BACKLIGHT.start(25)
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--log-level", default="INFO", help="logging level (default: %(default)s)"
+    )
+    return parser.parse_args(argv)
 
-        def default(pin):
-            label = LABELS[BUTTONS.index(pin)]
-            print(f"{label} button pressed, no action currently assigned.")
 
-        def bl_change(pin) -> None:
-            label = LABELS[BUTTONS.index(pin)]
-            _next_b_cycle = BL_CYCLE.pop(0)
-            print(f"{label} button pressed, backlight set to: {_next_b_cycle}.")
-            BL_CYCLE.append(_next_b_cycle)
-            BACKLIGHT.ChangeDutyCycle(_next_b_cycle)
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(levelname)s %(message)s",
+    )
 
-        def safe_shutdown(pin) -> None:
-            command = "sudo shutdown now -h"
-            label = LABELS[BUTTONS.index(pin)]
-            print(f"{label} button pressed, shutting down.")
-            BACKLIGHT.stop()
-            GPIO.cleanup()
-            system(command)
+    backlight = Backlight()
+    buttons = {
+        "A": Button(BUTTON_A, pull_up=True, bounce_time=BOUNCE_SECONDS),
+        "B": Button(BUTTON_B, pull_up=True, bounce_time=BOUNCE_SECONDS),
+        "X": Button(BUTTON_X, pull_up=True, bounce_time=BOUNCE_SECONDS),
+        "Y": Button(BUTTON_Y, pull_up=True, bounce_time=BOUNCE_SECONDS),
+    }
 
-        def safe_reboot(pin) -> None:
-            command = "sudo shutdown now -r"
-            label = LABELS[BUTTONS.index(pin)]
-            print(f"{label} button pressed, rebooting.")
-            BACKLIGHT.stop()
-            GPIO.cleanup()
-            system(command)
+    buttons["A"].when_pressed = lambda: LOG.info("A pressed, no action assigned")
+    buttons["B"].when_pressed = backlight.cycle
+    buttons["X"].when_pressed = lambda: run_power_command("poweroff", backlight)
+    buttons["Y"].when_pressed = lambda: run_power_command("reboot", backlight)
 
-        GPIO.add_event_detect(BUTTONS[0], GPIO.FALLING, default, bouncetime=200)
-        GPIO.add_event_detect(BUTTONS[1], GPIO.FALLING, bl_change, bouncetime=200)
-        GPIO.add_event_detect(BUTTONS[2], GPIO.FALLING, safe_shutdown, bouncetime=200)
-        GPIO.add_event_detect(BUTTONS[3], GPIO.FALLING, safe_reboot, bouncetime=200)
+    LOG.info(
+        "watching buttons on BCM %s",
+        ", ".join(str(b.pin.number) for b in buttons.values()),
+    )
 
+    try:
+        # gpiozero dispatches button callbacks from its own threads.
         signal.pause()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for button in buttons.values():
+            button.close()
+        backlight.close()
 
-    except Exception:
-        GPIO.cleanup()
-        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())
