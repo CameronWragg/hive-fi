@@ -37,10 +37,10 @@ import struct
 import sys
 import time
 from dataclasses import dataclass, field
-from functools import lru_cache
+from functools import lru_cache, partial
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
 LOG = logging.getLogger("hive-fi-nowplaying")
 
@@ -89,7 +89,7 @@ ITEM_RE = re.compile(
     rb"<code>([0-9a-fA-F]{1,8})</code>"
     rb"<length>(\d+)</length>"
     rb'(?:\n<data encoding="base64">\n([A-Za-z0-9+/=\s]*)</data>)?'
-    rb"</item>\n?",
+    rb"</item>\n*",
 )
 
 ITEM_END = b"</item>"
@@ -117,28 +117,23 @@ class Item:
 class MetadataPipe:
     """Incremental reader for the shairport-sync metadata FIFO.
 
-    The FIFO is opened non-blocking, and a write end is held open alongside it
-    so the read end never reports EOF when shairport-sync is idle or restarts.
+    The FIFO is opened non-blocking and reopened whenever shairport-sync closes
+    its end, so the reader survives idle periods and restarts.
     """
 
     def __init__(self, path: str) -> None:
         self.path = path
-        self._read_fd: int | None = None
-        self._write_fd: int | None = None
+        self._fd: int | None = None
         self._inode: int | None = None
         self._buffer = bytearray()
-        self._scan_from = 0
         self._warned_missing = False
 
     def close(self) -> None:
-        for attr in ("_read_fd", "_write_fd"):
-            fd = getattr(self, attr)
-            if fd is not None:
-                with contextlib.suppress(OSError):
-                    os.close(fd)
-                setattr(self, attr, None)
+        if self._fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(self._fd)
+            self._fd = None
         self._buffer.clear()
-        self._scan_from = 0
         self._inode = None
 
     def _open(self) -> bool:
@@ -152,20 +147,13 @@ class MetadataPipe:
         self._warned_missing = False
 
         try:
-            read_fd = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
+            fd = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
         except OSError as exc:
             LOG.warning("cannot open metadata pipe %s: %s", self.path, exc)
             return False
 
-        write_fd: int | None
-        try:
-            write_fd = os.open(self.path, os.O_WRONLY | os.O_NONBLOCK)
-        except OSError as exc:
-            LOG.debug("no write access to %s (%s), reopening on EOF", self.path, exc)
-            write_fd = None
-
         self.close()
-        self._read_fd, self._write_fd, self._inode = read_fd, write_fd, stat.st_ino
+        self._fd, self._inode = fd, stat.st_ino
         LOG.info("reading metadata from %s", self.path)
         return True
 
@@ -180,25 +168,25 @@ class MetadataPipe:
 
     def read(self, timeout: float) -> list[Item]:
         """Wait up to `timeout` seconds and return any complete items read."""
-        if self._read_fd is None:
+        if self._fd is None:
             if not self._open():
                 time.sleep(min(timeout, 1.0))
                 return []
         else:
             self._reopen_if_replaced()
-            if self._read_fd is None:
+            if self._fd is None:
                 time.sleep(min(timeout, 1.0))
                 return []
 
         try:
-            ready, _, _ = select.select([self._read_fd], [], [], timeout)
+            ready, _, _ = select.select([self._fd], [], [], timeout)
         except InterruptedError:
             return []
         if not ready:
             return []
 
         try:
-            chunk = os.read(self._read_fd, 1 << 16)
+            chunk = os.read(self._fd, 1 << 16)
         except BlockingIOError:
             return []
         except OSError as exc:
@@ -207,18 +195,19 @@ class MetadataPipe:
             return []
 
         if not chunk:
-            if self._write_fd is None:
-                if not self._open():
-                    self.close()
+            if not self._open():
+                self.close()
             return []
 
+        scan_from = max(0, len(self._buffer) - len(ITEM_END) + 1)
         self._buffer += chunk
-        if self._buffer.find(ITEM_END, self._scan_from) == -1:
-            self._scan_from = max(0, len(self._buffer) - len(ITEM_END) + 1)
-            if len(self._buffer) > MAX_BUFFER_BYTES:
-                self._discard()
-            return []
-        return self._drain()
+        items: list[Item] = []
+        if self._buffer.find(ITEM_END, scan_from) != -1:
+            items = self._drain()
+        if len(self._buffer) > MAX_BUFFER_BYTES:
+            LOG.warning("discarding %d bytes of unparsable metadata", len(self._buffer))
+            self._buffer.clear()
+        return items
 
     def _drain(self) -> list[Item]:
         items: list[Item] = []
@@ -228,19 +217,8 @@ class MetadataPipe:
             item = self._build(match)
             if item is not None:
                 items.append(item)
-        while end < len(self._buffer) and self._buffer[end] == 0x0A:
-            end += 1
         del self._buffer[:end]
-        self._scan_from = max(0, len(self._buffer) - len(ITEM_END) + 1)
-
-        if len(self._buffer) > MAX_BUFFER_BYTES:
-            self._discard()
         return items
-
-    def _discard(self) -> None:
-        LOG.warning("discarding %d bytes of unparsable metadata", len(self._buffer))
-        self._buffer.clear()
-        self._scan_from = 0
 
     @staticmethod
     def _build(match: re.Match[bytes]) -> Item | None:
@@ -292,7 +270,6 @@ class PlayerState:
 
     _pending: Track = field(default_factory=Track)
     _in_bundle: bool = False
-    _bundle_artwork: bool = False
     _progress_elapsed: float = 0.0
     _progress_total: float = 0.0
     _progress_at: float = 0.0
@@ -303,9 +280,8 @@ class PlayerState:
         self.revision += 1
 
     def begin_bundle(self) -> None:
-        self._pending = Track(artwork=self.track.artwork)
+        self._pending = Track()
         self._in_bundle = True
-        self._bundle_artwork = False
 
     def end_bundle(self) -> None:
         if self._pending.described():
@@ -314,16 +290,15 @@ class PlayerState:
                 self.track.artist,
                 self.track.album,
             ):
-                if not self._bundle_artwork:
-                    self._pending.artwork = None
                 self._progress_total = 0.0
                 self._progress_elapsed = 0.0
                 self._progress_at = time.monotonic()
+            elif self._pending.artwork is None:
+                self._pending.artwork = self.track.artwork
             self.track = self._pending
             self._touch()
-        self._pending = Track(artwork=self.track.artwork)
+        self._pending = Track()
         self._in_bundle = False
-        self._bundle_artwork = False
 
     def set_text(self, field_name: str, value: str) -> None:
         setattr(self._pending, field_name, value)
@@ -338,12 +313,9 @@ class PlayerState:
 
     def set_artwork(self, data: bytes) -> None:
         artwork = data or None
-        if self._in_bundle:
-            self._bundle_artwork = True
-            self._pending.artwork = artwork
+        self._pending.artwork = artwork
         if artwork != self.track.artwork:
             self.track.artwork = artwork
-            self._pending.artwork = artwork
             self._touch()
 
     def session_begin(self) -> None:
@@ -526,10 +498,8 @@ class Renderer:
         self._scrims: dict[int, Image.Image] = {}
         self._artwork_cache: tuple[bytes, Image.Image] | None = None
         self._logo = self._load_logo(logo_path)
-        self._placeholder = Image.blend(
-            self._logo, Image.new("RGB", (self.size, self.size), (0, 0, 0)), 0.55
-        )
-        self._widths: dict[tuple[str, int], int] = {}
+        self._placeholder = ImageEnhance.Brightness(self._logo).enhance(0.45)
+        self._text_width = lru_cache(maxsize=64)(partial(text_width, self._measure))
 
     def _load_logo(self, path: Path) -> Image.Image:
         try:
@@ -630,16 +600,6 @@ class Renderer:
             self._draw_volume(ImageDraw.Draw(frame), state.volume)
 
         return frame
-
-    def _text_width(self, text: str, font) -> int:
-        """text_width, cached: the same few lines are measured every frame."""
-        key = (text, id(font))
-        width = self._widths.get(key)
-        if width is None:
-            if len(self._widths) > 64:
-                self._widths.clear()
-            width = self._widths[key] = text_width(self._measure, text, font)
-        return width
 
     def _lines(self, state: PlayerState) -> list[Line]:
         track = state.track
@@ -844,9 +804,8 @@ def run(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
 
-    last_revision = -1
+    last_drawn_key: tuple[int, bool] | None = None
     last_drawn = 0.0
-    drew_volume = False
     draw_failing = False
 
     try:
@@ -864,10 +823,9 @@ def run(args: argparse.Namespace) -> int:
                     )
 
             now = time.monotonic()
-            showing_volume = state.showing_volume()
+            drawn_key = (state.revision, state.showing_volume())
             due = (
-                state.revision != last_revision
-                or showing_volume != drew_volume
+                drawn_key != last_drawn_key
                 or (
                     is_animating(state, scrolling)
                     and now - last_drawn >= interval * 0.9
@@ -881,9 +839,8 @@ def run(args: argparse.Namespace) -> int:
                     if not draw_failing:
                         LOG.exception("failed to draw frame")
                         draw_failing = True
-                last_revision = state.revision
+                last_drawn_key = drawn_key
                 last_drawn = now
-                drew_volume = showing_volume
     finally:
         pipe.close()
         if not args.preview and args.clear_on_exit:
