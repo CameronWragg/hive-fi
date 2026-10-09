@@ -1,87 +1,53 @@
 # shairport-sync
 
-hive-fi expects [shairport-sync](https://github.com/mikebrady/shairport-sync) built for
-**AirPlay 2** and **with the metadata pipe enabled**. Both are build-time choices, and
-neither is the default.
-
-## Why build from source
-
-- AirPlay 2 needs `--with-airplay-2` and a companion daemon,
-  [NQPTP](https://github.com/mikebrady/nqptp), for clock synchronisation. Debian and
-  Raspberry Pi OS packages are classic AirPlay 1 builds and do not ship NQPTP.
-- The metadata pipe needs `--with-metadata`. Without it, shairport-sync never writes
-  `/tmp/shairport-sync-metadata` and `hive-fi-nowplaying` will sit on the idle logo
-  forever.
-
-To check an existing install:
+hive-fi needs shairport-sync built with **AirPlay 2** and **metadata**. Distribution
+packages have neither. Check an existing build:
 
 ```console
 $ shairport-sync -V
 4.3.7-... -AirPlay2-metadata-alsa-soxr-avahi-...
 ```
 
-The build string has to contain both `AirPlay2` and `metadata`.
-
-## Dependencies
+## Build
 
 ```bash
-sudo apt update
 sudo apt install --no-install-recommends build-essential git autoconf automake libtool \
     libpopt-dev libconfig-dev libasound2-dev avahi-daemon libavahi-client-dev libssl-dev \
     libsoxr-dev libplist-dev libsodium-dev uuid-dev libgcrypt-dev xxd libplist-utils \
     libavutil-dev libavcodec-dev libavformat-dev
 ```
 
-On Debian 13 ("Trixie") and later, `systemd-dev` is also required. Check what it would
-pull in first — on a system with backports enabled it can do damage:
+On Debian 13 and later, also install `systemd-dev`. Do a dry run first
+(`apt install --dry-run systemd-dev`), because with backports enabled it can pull in
+more than you want.
+
+AirPlay 2 needs [NQPTP](https://github.com/mikebrady/nqptp) for clock sync:
 
 ```bash
-apt install --dry-run --no-install-recommends systemd-dev
-sudo apt install --no-install-recommends systemd-dev   # only if the dry run looks sane
+git clone https://github.com/mikebrady/nqptp.git && cd nqptp
+autoreconf -fi && ./configure --with-systemd-startup && make
+sudo make install && sudo systemctl enable --now nqptp
 ```
 
-## Build NQPTP
+Then shairport-sync. This is the upstream recipe plus `--with-metadata`, and takes a
+few minutes on a Zero 2 W:
 
 ```bash
-git clone https://github.com/mikebrady/nqptp.git
-cd nqptp
-autoreconf -fi
-./configure --with-systemd-startup
-make
-sudo make install
-sudo systemctl enable --now nqptp
-```
-
-## Build shairport-sync
-
-Note the added `--with-metadata`; the rest matches the upstream walkthrough.
-
-```bash
-git clone https://github.com/mikebrady/shairport-sync.git
-cd shairport-sync
+git clone https://github.com/mikebrady/shairport-sync.git && cd shairport-sync
 autoreconf -fi
 ./configure --sysconfdir=/etc --with-alsa --with-soxr --with-avahi \
     --with-ssl=openssl --with-systemd-startup --with-airplay-2 --with-metadata
-make
-sudo make install
+make && sudo make install
 ```
-
-`autoreconf` and `make` take several minutes on a Pi Zero 2 W.
 
 ## Configure
 
-Edit `/etc/shairport-sync.conf`. An example covering just the parts hive-fi cares about
-is in [`nowplaying/shairport-sync.conf.example`](../nowplaying/shairport-sync.conf.example).
+In `/etc/shairport-sync.conf` (see also
+[`shairport-sync.conf.example`](../nowplaying/shairport-sync.conf.example)):
 
 ```
-general = {
-    name = "hive-fi";
-};
-
-alsa = {
-    output_device = "hw:sndrpihifiberry";
-};
-
+general = { name = "hive-fi"; };
+alsa = { output_device = "hw:sndrpihifiberry"; };
 metadata = {
     enabled = "yes";
     include_cover_art = "yes";
@@ -90,38 +56,21 @@ metadata = {
 };
 ```
 
-- `enabled` turns the feed on; `include_cover_art` is separate and is what makes album
-  art appear. Without it you get text only.
-- `pipe_timeout` is how long shairport-sync will wait on a blocked pipe before giving
-  up on an item, in milliseconds. Cover art is the item most likely to hit it.
-- `cover_art_cache_directory` is only used by the D-Bus, MPRIS and MQTT interfaces.
-  hive-fi reads the pipe directly and does not need it.
-
-Then:
+`include_cover_art` is separate from `enabled`. `pipe_timeout` (ms) is how long
+shairport-sync waits on a blocked pipe before dropping an item, and large cover art is
+the item most likely to hit it.
 
 ```bash
 sudo systemctl enable --now shairport-sync
 ```
 
-`hive-fi` should now appear as an AirPlay target.
-
 ## How hive-fi reads the pipe
 
-The pipe is an ordinary FIFO. shairport-sync opens it for writing non-blocking and
-skips the write when nobody is listening, so a reader has to be attached for metadata
-to flow at all.
+shairport-sync skips writes when no reader is attached. `hive-fi-nowplaying` opens the
+FIFO read-only and reopens it whenever shairport-sync closes its end, if the FIFO is
+recreated, or once it first appears. It needs only read access.
 
-`hive-fi-nowplaying` opens the FIFO read-only and reopens it whenever shairport-sync
-closes its side, which happens between play sessions and on a `systemctl restart
-shairport-sync`. It only needs read access, so the FIFO can stay owned by
-shairport-sync. It also polls the path's inode and reopens if the FIFO is replaced.
-
-If the FIFO does not exist yet when the service starts — a plain boot ordering race —
-it logs a warning, shows the idle logo, and picks the pipe up as soon as it appears.
-
-## The metadata format
-
-Every item shairport-sync writes looks like this (line breaks as sent):
+## Metadata format
 
 ```
 <item><type>73736e63</type><code>70626567</code><length>0</length></item>
@@ -130,65 +79,31 @@ Every item shairport-sync writes looks like this (line breaks as sent):
 U29tZSBUcmFjaw==</data></item>
 ```
 
-`type` and `code` are four-character codes written as hexadecimal. `length` is the byte
-count of the decoded payload, which follows base64-encoded in 76-character lines when
-there is one.
+`type` and `code` are hex four-character codes. `length` is the decoded payload size.
+`core` items come from the AirPlay source, and `ssnc` items from shairport-sync.
 
-`type` is one of:
-
-- **`core`** — metadata from the AirPlay source, keyed by DMAP codes.
-- **`ssnc`** — messages generated by shairport-sync itself: session delimiters, cover
-  art, progress, volume.
-
-### Codes hive-fi acts on
-
-| Type | Code | Payload | Used for |
+| Type | Code | Payload | Meaning |
 | --- | --- | --- | --- |
-| `core` | `minm` | UTF-8 | Track title |
-| `core` | `asar` | UTF-8 | Artist |
-| `core` | `asal` | UTF-8 | Album |
-| `core` | `astm` | big-endian `uint32` | Track length in milliseconds |
-| `ssnc` | `mdst` / `mden` | RTP timestamp | Start and end of a metadata bundle; the display commits on `mden` so a track change appears in one redraw |
-| `ssnc` | `PICT` | JPEG or PNG | Cover art. A zero-length item clears it |
-| `ssnc` | `pbeg` / `pend` | none | Play session begin and end; `pend` returns the panel to the logo |
-| `ssnc` | `prsm` / `pfls` | none | Resume and flush (AirPlay 1 and 2) |
-| `ssnc` | `pres` / `paus` | none | Resume and pause (AirPlay 2 only) |
-| `ssnc` | `prgr` | `start/current/end` | Progress, as RTP frame counts at 44,100 frames per second |
-| `ssnc` | `pvol` | `airplay,volume,low,high` | Volume; the first field runs 0.00 down to −30.00, with −144.00 meaning mute |
+| `core` | `minm` / `asar` / `asal` | UTF-8 | Title / artist / album |
+| `core` | `astm` | big-endian `uint32` | Track length, ms |
+| `ssnc` | `mdst` / `mden` | | Metadata bundle start / end. The display commits on `mden` |
+| `ssnc` | `PICT` | JPEG or PNG | Cover art. Empty clears it |
+| `ssnc` | `pbeg` / `pend` | | Session start / end. `pend` shows the logo |
+| `ssnc` | `prsm` `pres` / `pfls` `paus` | | Resume / pause |
+| `ssnc` | `prgr` | `start/current/end` | Progress in RTP frames at 44.1 kHz, wrapping at 2³² |
+| `ssnc` | `pvol` | `airplay,volume,low,high` | Volume: 0 to −30, −144 is mute |
 
-RTP timestamps are 32-bit and wrap, so all the subtractions are taken modulo 2³². `prgr`
-only arrives on track changes and seeks, so the elapsed time between messages is
-interpolated from the monotonic clock while playing, and frozen while paused.
+`prgr` only arrives on track changes and seeks. Between messages the elapsed time is
+interpolated while playing. Other codes are ignored. The
+[metadata reader README](https://github.com/mikebrady/shairport-sync-metadata-reader)
+lists them all.
 
-Other `ssnc` codes are ignored. The full list — client name, DACP remote-control
-tokens, stream format, and so on — is in the
-[shairport-sync-metadata-reader README](https://github.com/mikebrady/shairport-sync-metadata-reader).
-
-### Watching the pipe by hand
-
-Only one reader can usefully consume a FIFO, so stop the display service first:
+To watch the raw stream, stop the display first, since only one reader gets the data:
 
 ```bash
 sudo systemctl stop hive-fi-nowplaying
-cat /tmp/shairport-sync-metadata            # raw items
+shairport-sync-metadata-reader < /tmp/shairport-sync-metadata   # or plain cat
 ```
 
-For decoded output, build
-[`shairport-sync-metadata-reader`](https://github.com/mikebrady/shairport-sync-metadata-reader):
-
-```console
-$ shairport-sync-metadata-reader < /tmp/shairport-sync-metadata
-"ssnc" "pbeg": "".
-"ssnc" "mdst": "".
-Album Name: "Kid A".
-Artist: "Radiohead".
-Title: "Everything In Its Right Place".
-"ssnc" "mden": "".
-Picture received, length 39461 bytes.
-"ssnc" "prgr": "2373925818/2373941178/2385081354".
-"ssnc" "prsm": "".
-```
-
-If you see the `ssnc` session messages but no `core` items, the source is not sending
-metadata. If you see `core` items but never "Picture received", `include_cover_art` is
-off.
+Session messages with no `core` items mean the source sends no metadata. No
+"Picture received" lines means `include_cover_art` is off.

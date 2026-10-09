@@ -1,132 +1,58 @@
 # Installation
 
-This walks through a fresh Raspberry Pi OS install. If you already have the OS and
-shairport-sync running, skip to [Install hive-fi](#install-hive-fi).
+## 1. Prepare the Pi
 
-Order matters a little: the boot configuration needs a reboot, and shairport-sync
-should be working before you put a display on top of it.
+1. Flash **Raspberry Pi OS Bookworm or later, 64-bit**. Lite is fine. Set the user,
+   Wi-Fi and SSH in Raspberry Pi Imager. The services run as whichever account you
+   create.
+2. Set up the [boot configuration](hardware.md#boot-configuration).
+3. Build and configure [shairport-sync](shairport-sync.md). Check you get sound over
+   AirPlay before going on.
 
-## 1. Operating system
+Use 64-bit: `gpiod` has no 32-bit ARM wheels and would have to be compiled.
 
-Flash **Raspberry Pi OS Bookworm or later, 64-bit** (Lite is plenty) with Raspberry Pi
-Imager, and use the imager's settings to configure the hostname, your user account,
-Wi-Fi and SSH before first boot.
+## 2. Python dependencies
 
-64-bit is worth insisting on: the `gpiod` package the display library depends on
-publishes `aarch64` wheels but none for 32-bit ARM, so a 32-bit install has to compile
-it against `libgpiod-dev` instead.
-
-There is no longer a default `pi` user. Whatever account you create is the one the
-services will run as — `install.sh` picks it up automatically.
-
-## 2. Enable SPI and the DAC
-
-Add the following to `/boot/firmware/config.txt` and reboot:
-
-```ini
-dtparam=spi=on
-dtoverlay=hifiberry-dac
-gpio=25=op,dh
-dtparam=audio=off
-```
-
-Details and verification steps are in [hardware.md](hardware.md).
-
-## 3. shairport-sync
-
-Build it for AirPlay 2 with metadata, and configure the pipe. This is the longest step
-and has its own page: **[shairport-sync.md](shairport-sync.md)**.
-
-Confirm it works before continuing — AirPlay something to it and check you get sound.
-
-## 4. Install hive-fi
-
-### Python dependencies
-
-Raspberry Pi OS marks its system Python as externally managed (PEP 668), so `pip
-install` into it is refused. Take the packaged builds of the heavy libraries from apt,
-then create a virtualenv that can see them for the rest:
+The system Python refuses `pip install` (PEP 668). Take the heavy libraries from apt
+and use a virtualenv that can see them:
 
 ```bash
 sudo apt install python3-venv python3-pil python3-numpy python3-spidev \
                  python3-gpiozero python3-lgpio fonts-dejavu-core
-```
-
-`fonts-dejavu-core` supplies the display font. Without a TrueType font the service
-falls back to Pillow's bitmap default, which looks poor at this size.
-
-```bash
 git clone https://github.com/CameronWragg/hive-fi.git ~/hive-fi
 cd ~/hive-fi
 python3 -m venv --system-site-packages .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-`--system-site-packages` matters: it lets the virtualenv reuse the apt-installed Pillow
-and NumPy instead of compiling its own. On Bookworm the packaged NumPy (1.24) is older
-than the display library asks for, so pip will fetch a newer wheel into the virtualenv —
-that is expected, and it does not disturb the system copy.
+pip may fetch a newer NumPy into the virtualenv, which is fine. Without
+`fonts-dejavu-core` the display falls back to a small bitmap font.
 
-### Check it before installing services
+To check the panel, run `.venv/bin/python bootlogo/hive-fi-bootlogo.py`. If it stays
+dark, that's the backlight: it only comes on once the buttons service is running.
+
+## 3. Services
 
 ```bash
-.venv/bin/python bootlogo/hive-fi-bootlogo.py
+sudo ./install.sh                    # or: --user someone-else
 ```
 
-The logo should appear. If the panel stays dark, the backlight is off — that is BCM 13,
-which nothing has driven yet; press on to the buttons service, or check
-[Troubleshooting](services.md#troubleshooting).
+This fills in the `__HIVE_FI_*__` placeholders in the [unit files](services.md),
+installs and starts them, and adds `/etc/sudoers.d/hive-fi` so the buttons can shut
+down and reboot.
 
-### Install the services
-
-```bash
-sudo ./install.sh
-```
-
-This writes three units into `/etc/systemd/system`, enables and starts them:
-
-| Unit | What it does |
-| --- | --- |
-| `hive-fi-bootlogo.service` | Paints the logo once at boot |
-| `hive-fi-buttons.service` | Buttons and backlight |
-| `hive-fi-nowplaying.service` | The shairport-sync display |
-
-It also installs `/etc/sudoers.d/hive-fi`, which lets the unprivileged buttons service
-run `/sbin/shutdown` so the X and Y buttons work.
-
-The unit files in the repository carry `__HIVE_FI_ROOT__`, `__HIVE_FI_USER__`,
-`__HIVE_FI_GROUP__` and `__HIVE_FI_PYTHON__` placeholders; `install.sh` substitutes the
-repository path, the invoking account and the virtualenv interpreter. Installing for a
-different account:
+Check it:
 
 ```bash
-sudo ./install.sh --user someone-else
-```
-
-## 5. Check
-
-```bash
-systemctl status hive-fi-nowplaying
 journalctl -u hive-fi-nowplaying -f
 ```
 
-You should see `reading metadata from /tmp/shairport-sync-metadata`, and the logo on
-the panel. Start playing something over AirPlay and the artwork should replace it.
+Look for `reading metadata from /tmp/shairport-sync-metadata`. Play something and the
+cover art should replace the logo.
 
-## Updating
-
-```bash
-cd ~/hive-fi
-git pull
-.venv/bin/pip install -r requirements.txt
-sudo ./install.sh          # re-renders the units in case they changed
-```
-
-## Removing
+## Updating and removing
 
 ```bash
-sudo ./install.sh --uninstall
+git pull && .venv/bin/pip install -r requirements.txt && sudo ./install.sh
+sudo ./install.sh --uninstall        # removes the units and sudoers file only
 ```
-
-This stops and disables the services, removes the unit files and the sudoers drop-in,
-and leaves the repository and shairport-sync alone.
