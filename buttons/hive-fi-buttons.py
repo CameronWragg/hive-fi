@@ -23,7 +23,6 @@ LOG = logging.getLogger("hive-fi-buttons")
 BUTTON_A, BUTTON_B, BUTTON_X, BUTTON_Y = 5, 6, 16, 24
 BACKLIGHT_PIN = 13
 
-# Brightness steps cycled by the B button, as fractions of full brightness.
 BACKLIGHT_LEVELS = (0.5, 0.75, 1.0, 0.0, 0.25)
 BACKLIGHT_DEFAULT = 0.25
 
@@ -60,13 +59,11 @@ def power_command(action: str) -> list[str]:
     ]
 
 
-def run_power_command(action: str, backlight: Backlight) -> None:
+def run_power_command(action: str) -> None:
     LOG.info("%s requested", action)
-    backlight.close()
     try:
         subprocess.run(power_command(action), check=True)
     except (OSError, subprocess.CalledProcessError):
-        # Most likely a missing sudoers rule -- see docs/installation.md.
         LOG.exception("could not %s", action)
 
 
@@ -95,8 +92,8 @@ def main(argv: list[str] | None = None) -> int:
 
     buttons["A"].when_pressed = lambda: LOG.info("A pressed, no action assigned")
     buttons["B"].when_pressed = backlight.cycle
-    buttons["X"].when_pressed = lambda: run_power_command("poweroff", backlight)
-    buttons["Y"].when_pressed = lambda: run_power_command("reboot", backlight)
+    buttons["X"].when_pressed = lambda: run_power_command("poweroff")
+    buttons["Y"].when_pressed = lambda: run_power_command("reboot")
 
     LOG.info(
         "watching buttons on BCM %s",
@@ -104,7 +101,6 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
-        # gpiozero dispatches button callbacks from its own threads.
         signal.pause()
     except KeyboardInterrupt:
         pass

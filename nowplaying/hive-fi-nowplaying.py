@@ -48,23 +48,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PIPE = "/tmp/shairport-sync-metadata"
 DEFAULT_LOGO = REPO_ROOT / "bootlogo" / "hive-fi.jpeg"
 
-# The Pirate Audio LCD is a 240x240 ST7789 on SPI0, data/command on BCM 9.
 SIZE = 240
 DC_PIN = 9
 SPI_PORT = 0
 SPI_SPEED_HZ = 80 * 1000 * 1000
 
-# Progress timestamps from AirPlay are RTP frame counts at 44.1kHz.
 RTP_RATE = 44100
 RTP_MODULUS = 1 << 32
 
-# Guard against an unterminated item wedging the parser and eating memory.
 MAX_BUFFER_BYTES = 32 * 1024 * 1024
 
-# How long a volume change stays on screen after the last `pvol` message.
 VOLUME_OVERLAY_SECONDS = 1.5
 
-# AirPlay reports volume from 0.0 (loudest) down to -30.0, with -144.0 as mute.
 AIRPLAY_VOLUME_MIN = -30.0
 AIRPLAY_VOLUME_MUTE = -144.0
 
@@ -81,27 +76,23 @@ REGULAR_FONTS = (
     "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
 )
 
-# DMAP codes we care about, mapped onto Track fields.
 CORE_TEXT_CODES = {
-    "minm": "title",  # item name, i.e. the track title
+    "minm": "title",
     "asar": "artist",
     "asal": "album",
 }
 
-
-# --------------------------------------------------------------------------
-# Metadata pipe
-# --------------------------------------------------------------------------
 
 ITEM_RE = re.compile(
     rb"<item>"
     rb"<type>([0-9a-fA-F]{1,8})</type>"
     rb"<code>([0-9a-fA-F]{1,8})</code>"
     rb"<length>(\d+)</length>"
-    rb'(?:\n<data encoding="base64">\n(.*?)</data>)?'
+    rb'(?:\n<data encoding="base64">\n([A-Za-z0-9+/=\s]*)</data>)?'
     rb"</item>\n?",
-    re.DOTALL,
 )
+
+ITEM_END = b"</item>"
 
 
 def fourcc(digits: bytes) -> str:
@@ -135,7 +126,8 @@ class MetadataPipe:
         self._read_fd: int | None = None
         self._write_fd: int | None = None
         self._inode: int | None = None
-        self._buffer = b""
+        self._buffer = bytearray()
+        self._scan_from = 0
         self._warned_missing = False
 
     def close(self) -> None:
@@ -145,7 +137,8 @@ class MetadataPipe:
                 with contextlib.suppress(OSError):
                     os.close(fd)
                 setattr(self, attr, None)
-        self._buffer = b""
+        self._buffer.clear()
+        self._scan_from = 0
         self._inode = None
 
     def _open(self) -> bool:
@@ -160,12 +153,16 @@ class MetadataPipe:
 
         try:
             read_fd = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
-            # Holding a writer open keeps the reader from seeing EOF between
-            # shairport-sync play sessions.
-            write_fd = os.open(self.path, os.O_WRONLY | os.O_NONBLOCK)
         except OSError as exc:
             LOG.warning("cannot open metadata pipe %s: %s", self.path, exc)
             return False
+
+        write_fd: int | None
+        try:
+            write_fd = os.open(self.path, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError as exc:
+            LOG.debug("no write access to %s (%s), reopening on EOF", self.path, exc)
+            write_fd = None
 
         self.close()
         self._read_fd, self._write_fd, self._inode = read_fd, write_fd, stat.st_ino
@@ -210,9 +207,17 @@ class MetadataPipe:
             return []
 
         if not chunk:
+            if self._write_fd is None:
+                if not self._open():
+                    self.close()
             return []
 
         self._buffer += chunk
+        if self._buffer.find(ITEM_END, self._scan_from) == -1:
+            self._scan_from = max(0, len(self._buffer) - len(ITEM_END) + 1)
+            if len(self._buffer) > MAX_BUFFER_BYTES:
+                self._discard()
+            return []
         return self._drain()
 
     def _drain(self) -> list[Item]:
@@ -223,13 +228,19 @@ class MetadataPipe:
             item = self._build(match)
             if item is not None:
                 items.append(item)
-        # Items are newline separated; drop any separator we stopped on.
-        self._buffer = self._buffer[end:].lstrip(b"\n")
+        while end < len(self._buffer) and self._buffer[end] == 0x0A:
+            end += 1
+        del self._buffer[:end]
+        self._scan_from = max(0, len(self._buffer) - len(ITEM_END) + 1)
 
         if len(self._buffer) > MAX_BUFFER_BYTES:
-            LOG.warning("discarding %d bytes of unparsable metadata", len(self._buffer))
-            self._buffer = b""
+            self._discard()
         return items
+
+    def _discard(self) -> None:
+        LOG.warning("discarding %d bytes of unparsable metadata", len(self._buffer))
+        self._buffer.clear()
+        self._scan_from = 0
 
     @staticmethod
     def _build(match: re.Match[bytes]) -> Item | None:
@@ -247,9 +258,14 @@ class MetadataPipe:
         return Item(item_type, item_code, payload)
 
 
-# --------------------------------------------------------------------------
-# Player state
-# --------------------------------------------------------------------------
+def rtp_delta(start: int, stop: int) -> int:
+    """Frames from start to stop, allowing for the 32-bit RTP clock wrapping.
+
+    Signed, so a position slightly before start (shairport-sync can report one
+    at the top of a track) comes out a little negative rather than ~27 hours.
+    """
+    delta = (stop - start) % RTP_MODULUS
+    return delta - RTP_MODULUS if delta >= RTP_MODULUS // 2 else delta
 
 
 @dataclass
@@ -276,21 +292,20 @@ class PlayerState:
 
     _pending: Track = field(default_factory=Track)
     _in_bundle: bool = False
+    _bundle_artwork: bool = False
     _progress_elapsed: float = 0.0
     _progress_total: float = 0.0
     _progress_at: float = 0.0
 
-    # Bumped whenever something worth redrawing changes.
     revision: int = 0
 
     def _touch(self) -> None:
         self.revision += 1
 
-    # -- metadata bundles --------------------------------------------------
-
     def begin_bundle(self) -> None:
         self._pending = Track(artwork=self.track.artwork)
         self._in_bundle = True
+        self._bundle_artwork = False
 
     def end_bundle(self) -> None:
         if self._pending.described():
@@ -299,19 +314,20 @@ class PlayerState:
                 self.track.artist,
                 self.track.album,
             ):
-                # A genuinely new track invalidates the old art until PICT lands.
-                self._pending.artwork = None
+                if not self._bundle_artwork:
+                    self._pending.artwork = None
                 self._progress_total = 0.0
+                self._progress_elapsed = 0.0
+                self._progress_at = time.monotonic()
             self.track = self._pending
             self._touch()
         self._pending = Track(artwork=self.track.artwork)
         self._in_bundle = False
+        self._bundle_artwork = False
 
     def set_text(self, field_name: str, value: str) -> None:
         setattr(self._pending, field_name, value)
         if not self._in_bundle:
-            # Not every source brackets its metadata with mdst/mden, so apply
-            # unbracketed items immediately rather than waiting for a commit.
             setattr(self.track, field_name, value)
             self._touch()
 
@@ -322,12 +338,13 @@ class PlayerState:
 
     def set_artwork(self, data: bytes) -> None:
         artwork = data or None
+        if self._in_bundle:
+            self._bundle_artwork = True
+            self._pending.artwork = artwork
         if artwork != self.track.artwork:
             self.track.artwork = artwork
             self._pending.artwork = artwork
             self._touch()
-
-    # -- transport ---------------------------------------------------------
 
     def session_begin(self) -> None:
         self.active = True
@@ -347,7 +364,6 @@ class PlayerState:
 
     def set_playing(self, playing: bool) -> None:
         if playing != self.playing:
-            # Freeze the interpolated position before changing direction.
             self._progress_elapsed = self.elapsed()
             self._progress_at = time.monotonic()
             self.playing = playing
@@ -355,8 +371,8 @@ class PlayerState:
             self._touch()
 
     def set_progress(self, start: int, current: int, end: int) -> None:
-        elapsed = ((current - start) % RTP_MODULUS) / RTP_RATE
-        total = ((end - start) % RTP_MODULUS) / RTP_RATE
+        elapsed = rtp_delta(start, current) / RTP_RATE
+        total = rtp_delta(start, end) / RTP_RATE
         self._progress_elapsed = max(0.0, elapsed)
         self._progress_total = max(0.0, total)
         self._progress_at = time.monotonic()
@@ -373,8 +389,6 @@ class PlayerState:
             self.volume = level
             self.volume_changed_at = time.monotonic()
             self._touch()
-
-    # -- derived -----------------------------------------------------------
 
     def duration(self) -> float:
         return self._progress_total or self.track.duration
@@ -437,11 +451,6 @@ def apply_item(state: PlayerState, item: Item) -> None:
                 state.set_volume(float(parts[0]))
             except ValueError:
                 LOG.debug("unparsable volume string %r", item.text())
-
-
-# --------------------------------------------------------------------------
-# Rendering
-# --------------------------------------------------------------------------
 
 
 def load_font(candidates: tuple[str, ...], size: int) -> ImageFont.ImageFont:
@@ -517,8 +526,10 @@ class Renderer:
         self._scrims: dict[int, Image.Image] = {}
         self._artwork_cache: tuple[bytes, Image.Image] | None = None
         self._logo = self._load_logo(logo_path)
-
-    # -- backgrounds -------------------------------------------------------
+        self._placeholder = Image.blend(
+            self._logo, Image.new("RGB", (self.size, self.size), (0, 0, 0)), 0.55
+        )
+        self._widths: dict[tuple[str, int], int] = {}
 
     def _load_logo(self, path: Path) -> Image.Image:
         try:
@@ -571,13 +582,11 @@ class Renderer:
         self._scrims[top] = mask
         return mask
 
-    # -- frame -------------------------------------------------------------
-
     def needs_scroll(self, state: PlayerState) -> bool:
         """True when a line is too wide to fit and has to be scrolled."""
         available = self.size - 2 * self.SIDE_MARGIN
         return any(
-            text_width(self._measure, line.text, line.font) > available
+            self._text_width(line.text, line.font) > available
             for line in self._lines(state)
         )
 
@@ -586,15 +595,13 @@ class Renderer:
             return self._logo.copy()
 
         artwork = self._artwork(state.track.artwork)
-        frame = artwork.copy() if artwork is not None else self._placeholder()
+        frame = (artwork if artwork is not None else self._placeholder).copy()
         draw = ImageDraw.Draw(frame)
 
         lines = self._lines(state)
         duration = state.duration()
         show_progress = duration > 0
 
-        # Lay the text out from the bottom of the screen upwards so the frame
-        # still looks right when the source gives us no album or no duration.
         cursor = self.size - self.BOTTOM_MARGIN
         progress_top = None
         if show_progress:
@@ -624,11 +631,15 @@ class Renderer:
 
         return frame
 
-    def _placeholder(self) -> Image.Image:
-        """A dimmed logo, used while a track has details but no cover art."""
-        return Image.blend(
-            self._logo, Image.new("RGB", (self.size, self.size), (0, 0, 0)), 0.55
-        )
+    def _text_width(self, text: str, font) -> int:
+        """text_width, cached: the same few lines are measured every frame."""
+        key = (text, id(font))
+        width = self._widths.get(key)
+        if width is None:
+            if len(self._widths) > 64:
+                self._widths.clear()
+            width = self._widths[key] = text_width(self._measure, text, font)
+        return width
 
     def _lines(self, state: PlayerState) -> list[Line]:
         track = state.track
@@ -652,15 +663,13 @@ class Renderer:
         now: float,
     ) -> None:
         available = self.size - 2 * self.SIDE_MARGIN
-        width = text_width(draw, line.text, line.font)
+        width = self._text_width(line.text, line.font)
         if width <= available:
             draw.text(
                 (self.SIDE_MARGIN, top), line.text, font=line.font, fill=line.colour
             )
             return
 
-        # Too wide to fit: render the whole line once onto a transparent strip
-        # and slide a window over it, fading the ends so it does not clip hard.
         strip = Image.new("RGBA", (width + 8, line.height), (0, 0, 0, 0))
         ImageDraw.Draw(strip).text(
             (0, 0), line.text, font=line.font, fill=line.colour + (255,)
@@ -760,11 +769,6 @@ def _fade_mask(width: int, height: int, fade: int = 14) -> Image.Image:
     return mask
 
 
-# --------------------------------------------------------------------------
-# Outputs
-# --------------------------------------------------------------------------
-
-
 class LcdOutput:
     """The Pirate Audio ST7789 panel.
 
@@ -800,13 +804,6 @@ class PreviewOutput:
         image.save(self.path)
 
 
-# --------------------------------------------------------------------------
-# Main loop
-# --------------------------------------------------------------------------
-
-
-# Scrolling cadence. Each frame is a full 240x240 SPI transfer, which is the
-# expensive part on a Pi Zero 2 W, so this is deliberately modest.
 SCROLL_INTERVAL = 1.0 / 10
 
 
@@ -818,7 +815,6 @@ def frame_interval(state: PlayerState, scrolling: bool) -> float:
         return 1.0
     if scrolling:
         return SCROLL_INTERVAL
-    # Nothing is moving except the progress bar and the elapsed clock.
     return 0.5 if state.playing else 1.0
 
 
@@ -850,6 +846,7 @@ def run(args: argparse.Namespace) -> int:
 
     last_revision = -1
     last_drawn = 0.0
+    drew_volume = False
     draw_failing = False
 
     try:
@@ -861,27 +858,32 @@ def run(args: argparse.Namespace) -> int:
                 LOG.debug("%s/%s (%d bytes)", item.type, item.code, len(item.payload))
                 try:
                     apply_item(state, item)
-                except Exception:  # a malformed item must not kill the display
+                except Exception:
                     LOG.exception(
                         "failed to apply metadata item %s/%s", item.type, item.code
                     )
 
             now = time.monotonic()
-            due = state.revision != last_revision or (
-                is_animating(state, scrolling) and now - last_drawn >= interval * 0.9
+            showing_volume = state.showing_volume()
+            due = (
+                state.revision != last_revision
+                or showing_volume != drew_volume
+                or (
+                    is_animating(state, scrolling)
+                    and now - last_drawn >= interval * 0.9
+                )
             )
             if due:
                 try:
                     output.show(renderer.render(state, now))
                     draw_failing = False
                 except Exception:
-                    # Frames can come ten a second, so only report the first
-                    # failure of a run rather than filling the journal.
                     if not draw_failing:
                         LOG.exception("failed to draw frame")
                         draw_failing = True
                 last_revision = state.revision
                 last_drawn = now
+                drew_volume = showing_volume
     finally:
         pipe.close()
         if not args.preview and args.clear_on_exit:

@@ -111,11 +111,13 @@ The pipe is an ordinary FIFO. shairport-sync opens it for writing non-blocking a
 skips the write when nobody is listening, so a reader has to be attached for metadata
 to flow at all.
 
-`hive-fi-nowplaying` opens the FIFO for reading *and* holds a write descriptor open
-alongside it. That second descriptor means the read end never reports end-of-file when
-shairport-sync closes its side between play sessions, so the service keeps running
-across sessions and across a `systemctl restart shairport-sync`. It also polls the
-path's inode and reopens if the FIFO is replaced.
+`hive-fi-nowplaying` opens the FIFO for reading and, when it has permission, holds a
+write descriptor open alongside it. That second descriptor means the read end never
+reports end-of-file when shairport-sync closes its side between play sessions.
+shairport-sync usually creates the FIFO as its own user without write access for
+anyone else; in that case the service reopens the pipe after each end-of-file instead.
+Either way it keeps running across sessions and across a `systemctl restart
+shairport-sync`. It also polls the path's inode and reopens if the FIFO is replaced.
 
 If the FIFO does not exist yet when the service starts — a plain boot ordering race —
 it logs a warning, shows the idle logo, and picks the pipe up as soon as it appears.

@@ -1,7 +1,6 @@
 [Unit]
 Description=hive-fi Pirate Audio buttons
 Documentation=https://github.com/CameronWragg/hive-fi
-After=multi-user.target
 
 [Service]
 Type=simple

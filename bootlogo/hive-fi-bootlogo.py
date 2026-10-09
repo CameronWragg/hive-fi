@@ -20,7 +20,6 @@ LOG = logging.getLogger("hive-fi-bootlogo")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LOGO = REPO_ROOT / "bootlogo" / "hive-fi.jpeg"
 
-# The Pirate Audio LCD is a 240x240 ST7789 on SPI0, data/command on BCM 9.
 SIZE = 240
 DC_PIN = 9
 SPI_PORT = 0
@@ -55,7 +54,6 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     try:
-        # Imported here so that --help works on a machine without the hardware.
         from st7789 import BG_SPI_CS_FRONT, ST7789
 
         display = ST7789(
@@ -69,7 +67,6 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         with Image.open(args.logo) as image:
-            # Scale and centre-crop rather than squashing to the square panel.
             logo = ImageOps.fit(
                 ImageOps.exif_transpose(image).convert("RGB"),
                 (SIZE, SIZE),

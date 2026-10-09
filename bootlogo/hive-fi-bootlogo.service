@@ -1,7 +1,6 @@
 [Unit]
 Description=hive-fi boot logo
 Documentation=https://github.com/CameronWragg/hive-fi
-After=multi-user.target
 # hive-fi-nowplaying draws to the same panel; make sure the logo lands first.
 Before=hive-fi-nowplaying.service
 

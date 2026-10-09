@@ -1,7 +1,7 @@
 [Unit]
 Description=hive-fi now playing display (shairport-sync)
 Documentation=https://github.com/CameronWragg/hive-fi
-After=multi-user.target shairport-sync.service
+After=shairport-sync.service
 # Not a hard dependency: the service shows the idle logo and waits for the
 # metadata pipe, so it copes with shairport-sync starting later or restarting.
 Wants=shairport-sync.service
